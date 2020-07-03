@@ -32,24 +32,27 @@ def _sh_quote(s):
 
 # Unicode conversion functions; assume UTF-8
 
-def asbytes(s):
+def asbytes(s, encoding='utf-8'):
     """Turns unicode into bytes, if needed.
 
     Assumes UTF-8.
+
+    :param str encoding , the encode format, default: utf-8
     """
     if isinstance(s, bytes):
         return s
     else:
-        return s.encode('utf-8')
+        return s.encode(encoding)
 
 
-def asunicode(s):
+def asunicode(s, encoding='utf-8'):
     """Turns bytes into unicode, if needed.
 
     Uses UTF-8.
+    :param str encoding, the decode format, default:utf-8
     """
     if isinstance(s, bytes):
-        return s.decode('utf-8', 'replace')
+        return s.decode(encoding, 'replace')
     else:
         return s
 
@@ -132,7 +135,7 @@ class SCPClient(object):
         self.close()
 
     def put(self, files, remote_path=b'.',
-            recursive=False, preserve_times=False):
+            recursive=False, preserve_times=False, encoding='utf-8'):
         """
         Transfer files and directories to remote host.
 
@@ -146,6 +149,7 @@ class SCPClient(object):
         @type recursive: bool
         @param preserve_times: preserve mtime and atime of transferred files
             and directories.
+        @param str encoding: 文件名使用的编码格式，默认:utf-8
         @type preserve_times: bool
         """
         self.preserve_times = preserve_times
@@ -161,9 +165,9 @@ class SCPClient(object):
             files = [files]
 
         if recursive:
-            self._send_recursive(files)
+            self._send_recursive(files, encoding)
         else:
-            self._send_files(files)
+            self._send_files(files, encoding)
 
         self.close()
 
@@ -195,7 +199,7 @@ class SCPClient(object):
         self.close()
 
     def get(self, remote_path, local_path='',
-            recursive=False, preserve_times=False):
+            recursive=False, preserve_times=False, encoding='utf-8'):
         """
         Transfer files and directories from remote host to localhost.
 
@@ -209,6 +213,7 @@ class SCPClient(object):
         @type recursive: bool
         @param preserve_times: preserve mtime and atime of transferred files
             and directories.
+        @param str encoding, 服务器返回信息的解码格式，默认utf-8
         @type preserve_times: bool
         """
         if not isinstance(remote_path, (list, tuple)):
@@ -235,7 +240,7 @@ class SCPClient(object):
                                   prsv +
                                   b" -f " +
                                   b' '.join(remote_path))
-        self._recv_all()
+        self._recv_all(encoding)
         self.close()
 
     def _open(self):
@@ -262,17 +267,23 @@ class SCPClient(object):
         mtime = int(stats.st_mtime)
         return (mode, size, mtime, atime)
 
-    def _send_files(self, files):
+    def _send_files(self, files, encoding='utf-8'):
+        '''
+        @param str encoding: 文件名使用的编码格式，默认:utf-8
+        '''
         for name in files:
             (mode, size, mtime, atime) = self._read_stats(name)
             if self.preserve_times:
                 self._send_time(mtime, atime)
             fl = open(name, 'rb')
-            self._send_file(fl, name, mode, size)
+            self._send_file(fl, name, mode, size, encoding)
             fl.close()
 
-    def _send_file(self, fl, name, mode, size):
-        basename = asbytes(os.path.basename(name))
+    def _send_file(self, fl, name, mode, size, encoding='utf-8'):
+        '''
+        @param str encoding: 文件名使用的编码格式，默认:utf-8
+        '''
+        basename = asbytes(os.path.basename(name), encoding)
         # The protocol can't handle \n in the filename.
         # Quote them as the control sequence \^J for now,
         # which is how openssh handles it.
@@ -315,16 +326,19 @@ class SCPClient(object):
         # now we're in our common base directory, so on
         self._send_pushd(to_dir)
 
-    def _send_recursive(self, files):
+    def _send_recursive(self, files, encoding='utf-8'):
+        '''
+        @param str encoding: 文件名使用的编码格式，默认:utf-8
+        '''
         for base in files:
             if not os.path.isdir(base):
                 # filename mixed into the bunch
-                self._send_files([base])
+                self._send_files([base], encoding)
                 continue
             last_dir = asbytes(base)
             for root, dirs, fls in os.walk(base):
                 self._chdir(last_dir, asbytes(root))
-                self._send_files([os.path.join(root, f) for f in fls])
+                self._send_files([os.path.join(root, f) for f in fls], encoding)
                 last_dir = asbytes(root)
             # back out of the directory
             while self._pushed > 0:
@@ -369,7 +383,10 @@ class SCPClient(object):
         else:
             raise SCPException('Invalid response from server', msg)
 
-    def _recv_all(self):
+    def _recv_all(self, encoding='utf-8'):
+        '''
+        :param str encoding 用于设置解码服务端返回信息的解码格式
+        '''
         # loop over scp commands, and receive as necessary
         command = {b'C': self._recv_file,
                    b'T': self._set_time,
@@ -386,7 +403,10 @@ class SCPClient(object):
             code = msg[0:1]
             if code not in command:
                 raise SCPException(asunicode(msg[1:]))
-            command[code](msg[1:])
+            if code==b'C' or code==b'D':
+                command[code](msg[1:], encoding)
+            else:
+                command[code](msg[1:])
         # directory times can't be set until we're done writing files
         self._set_dirtimes()
 
@@ -401,7 +421,7 @@ class SCPClient(object):
         # save for later
         self._utime = (atime, mtime)
 
-    def _recv_file(self, cmd):
+    def _recv_file(self, cmd, encoding='utf-8'):
         chan = self.channel
         parts = cmd.strip().split(b' ', 2)
 
@@ -412,7 +432,7 @@ class SCPClient(object):
                 path = self._recv_dir
                 self._rename = False
             elif os.name == 'nt':
-                name = parts[2].decode('utf-8')
+                name = parts[2].decode(encoding)
                 assert not os.path.isabs(name)
                 path = os.path.join(asunicode_win(self._recv_dir), name)
             else:
@@ -469,7 +489,7 @@ class SCPClient(object):
             file_hdl.close()
         # '\x00' confirmation sent in _recv_all
 
-    def _recv_pushd(self, cmd):
+    def _recv_pushd(self, cmd, encoding='utf-8'):
         parts = cmd.split(b' ', 2)
         try:
             mode = int(parts[0], 8)
@@ -477,7 +497,7 @@ class SCPClient(object):
                 path = self._recv_dir
                 self._rename = False
             elif os.name == 'nt':
-                name = parts[2].decode('utf-8')
+                name = parts[2].decode(encoding)
                 assert not os.path.isabs(name)
                 path = os.path.join(asunicode_win(self._recv_dir), name)
                 self._depth += 1
@@ -546,7 +566,7 @@ def put(transport, files, remote_path=b'.',
 
 
 def get(transport, remote_path, local_path='',
-        recursive=False, preserve_times=False):
+        recursive=False, preserve_times=False, encoding='utf-8'):
     """
     Transfer files and directories from remote host to localhost.
 
@@ -565,7 +585,8 @@ def get(transport, remote_path, local_path='',
     @type recursive: bool
     @param preserve_times: preserve mtime and atime of transferred files
         and directories.
+    @param str encoding, 服务器返回信息的解码格式，默认utf-8
     @type preserve_times: bool
     """
     with SCPClient(transport) as client:
-        client.get(remote_path, local_path, recursive, preserve_times)
+        client.get(remote_path, local_path, recursive, preserve_times, encoding)
