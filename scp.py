@@ -158,7 +158,7 @@ class SCPClient(object):
         self.channel.settimeout(self.socket_timeout)
         scp_command = (b'scp -t ', b'scp -r -t ')[recursive]
         self.channel.exec_command(scp_command +
-                                  self.sanitize(asbytes(remote_path)))
+                                  self.sanitize(asbytes(remote_path, encoding)))
         self._recv_confirm()
 
         if not isinstance(files, (list, tuple)):
@@ -335,11 +335,11 @@ class SCPClient(object):
                 # filename mixed into the bunch
                 self._send_files([base], encoding)
                 continue
-            last_dir = asbytes(base)
+            last_dir = asbytes(base, encoding)
             for root, dirs, fls in os.walk(base):
                 self._chdir(last_dir, asbytes(root))
-                self._send_files([os.path.join(root, f) for f in fls], encoding)
-                last_dir = asbytes(root)
+                self._send_files([os.path.join(root, f) for f in fls], encoding=encoding)
+                last_dir = asbytes(root, encoding)
             # back out of the directory
             while self._pushed > 0:
                 self._send_popd()
